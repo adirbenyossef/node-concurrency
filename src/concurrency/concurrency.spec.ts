@@ -1,5 +1,5 @@
 import { JobFactory } from '../job/job';
-import { Concurrency } from '../concurrency/concurrency';
+import { Concurrency } from './concurrency';
 
 describe('Concurrency', () => {
     let concurrency: Concurrency;
