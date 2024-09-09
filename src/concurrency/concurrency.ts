@@ -1,22 +1,35 @@
 import { Job } from '../job/job';
+import TransactionManager from '../transaction-manager/transaction-manager';
+
+const transactionManager = new TransactionManager();
 
 export class Concurrency {
     private scheduledTasks: Array<{ job: Job, timestamp: number }> = [];
     private throttledJobs: Map<string, NodeJS.Timeout> = new Map();
 
-    private constructor() { }
+    private constructor(private readonly executor: (job: Job) => Promise<any>) { }
 
     static builder() {
-        return new Concurrency();
+        return new Concurrency((job: Job) => job.execute());
     }
 
-    schedule(job: Job, timestamp: Date): Concurrency {
+    async schedule(job: Job, timestamp: Date): Promise<Concurrency> {
         const delay = timestamp.getTime() - Date.now();
-        if (delay <= 0) {
-            throw new Error('Timestamp should be in the future.');
-        }
-        setTimeout(() => job.execute(), delay);
-        return this;
+    if (delay <= 0) {
+      throw new Error('Timestamp should be in the future.');
+    }
+
+    if (!await transactionManager.acquireLock(job.id)) {
+      throw new Error(`Job ${job.id} is already scheduled`);
+    }
+
+    try {
+      setTimeout(() => this.scheduleTask(job, delay), delay);
+    } finally {
+      await transactionManager.releaseLock(job.id);
+    }
+
+    return this;
     }
 
     async parallel(jobs: Job[], chunkSize: number): Promise<any[]> {
@@ -39,5 +52,21 @@ export class Concurrency {
         };
         throttledFunc();
         return this;
+    }
+
+    private async scheduleTask(job: Job, delay: number): Promise<void> {
+        try {
+            if (!await transactionManager.acquireLock(job.id)) {
+              throw new Error(`Job ${job.id} is already running`);
+            }
+            await this.executeJob(job);
+        } finally {
+        await transactionManager.releaseLock(job.id);
+        }
+    }
+
+    private async executeJob(job: Job): Promise<void> {
+        await this.executor(job);
+        this.scheduledTasks.shift();
     }
 }
